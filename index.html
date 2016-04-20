@@ -1,0 +1,78 @@
+<html>
+	<head>
+		<title>buzzfeed websocket</title>
+		<script src="https://code.jquery.com/jquery-2.2.3.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.0.3/sockjs.js"></script>
+		<style>
+			input { margin: 10px; }
+			span  { margin: 10px; }
+		</style>
+		<script>
+			var sock;
+			var _connect = function() {
+				console.log("Here we go");
+
+				//var url = 'http://socks.buzzfeed.com:9999/sockjs';
+				var url = window.location.origin + '/sockjs';
+				sock = new SockJS(url, undefined, [ 'websocket' ]);
+				console.log("Here is the sock object:")
+				console.log(sock);
+
+				sock.onopen = function() {
+					console.log('from onopen');
+					this.send(JSON.stringify({
+						action: 'sub',
+						data: {
+							room: $("#room").val(),
+							topic: '#',
+							user: { username: 'razsh' },
+							page: '',
+							userAgent: 'mozzilaaaaaa',
+							window_id: '898841-48984284-2981098274-2849274',
+							auth_token: '847b84da48c2f433'
+						}
+					}));
+				};
+
+				sock.onmessage = function(e) {
+					console.log('from onmessage', e.data);
+				};
+
+				sock.onclose = function() {
+					console.log('from onclose');
+				};
+			};
+
+			var _send = function() {
+					console.log("Going to send something ... ");
+					sock.send(JSON.stringify({
+						action: 'message',
+						message: $("#message").val()
+					}));
+			};
+
+			var _close = function() {
+				console.log("Going to close the connection");
+				sock.close();
+			}
+		</script>
+	</head>
+	<body>
+		<h1>CMS</h1>
+		<div>
+			<input type="button" id="connect" value="connect" onclick="_connect()"/>
+		</div>
+		<div>
+			<input type="button" id="send" value="send" onclick="_send()"/>
+			<input type="text" = id="message" value="test">
+		</div>
+		<div>
+			<input type="button" id="close" value="close" onclick="_close()"/>
+		</div>
+		<div>
+			<span>room</span>
+			<input type="text" = id="room" value="cms-892840001">
+		</div>
+
+	</body>
+</html>
