@@ -1,30 +1,103 @@
 from tornado import web, ioloop
 from sockjs.tornado import SockJSRouter, SockJSConnection
+from tornado.httpclient import HTTPRequest, AsyncHTTPClient
 
 import json
 import logging
 import re
+import functools
 import settings
-
-rooms = dict()
 
 logger = logging.getLogger('socketserver')
 logger.setLevel(logging.ERROR)
-
-def connectionsCleanup():
-    for room_name in rooms.keys():
-        logger.debug("Found room %s" % room_name)
-        for conn in rooms[room_name]:
-            logger.debug("Found connection in room %s" % room_name)
-            if conn.is_closed:
-                conn.on_close()
 
 class IndexHandler(web.RequestHandler):
     def get(self):
         self.render("index.html")
 
 class SocketHandler(SockJSConnection):
+    rooms = dict()
+
+    def __init__(self, session):
+        self.session = session
+        self.http_client = AsyncHTTPClient(force_instance=True, defaults=dict(
+            user_agent    = "BF-cms-websocket-server",
+            auth_username = settings.WEB_APP_AUTH_USER,
+            auth_password = settings.WEB_APP_AUTH_PASS
+        ))
+
     def on_open(self, info):
+        return
+
+    def validate_auth_token(self, response, **kwargs):
+        if response.error:
+            logger.error("A problem with the auth request: %s" % response.error)
+            self.close(4500, "Server error");
+            return
+        else:
+            try:
+                res_body = json.loads(response.body)
+            except ValueError:
+                logger.error("Received bad json message")
+                self.close(4500, "Server error");
+                return
+
+            if res_body and 'validated' in res_body and res_body['validated']:
+                # auth accepted
+                logger.debug("Token was accepted")
+                room      = kwargs['room']
+                user      = kwargs['user']
+                window_id = kwargs['window_id']
+                message   = kwargs['message']
+                self.register_user(room, user, window_id, message)
+            else:
+                # auth rejected
+                logger.debug("Token was accepted")
+                socket.close(4001, "Invalid authentication token");
+        return
+
+    def register_user(self, room, user, window_id, message):
+        # create the room
+        if not room in self.rooms:
+            self.rooms[room] = set()
+
+        # find the users who are already in the room
+        room_users = []
+        logger.debug("Checking if there are other users in the room %s" % room)
+        for conn in self.rooms[room]:
+            room_client = getattr(conn, 'client')
+            logger.debug("Found %s in the room %s" % (room_client['username'], room))
+            room_users.append(room_client)
+
+        # add client to the room
+        logger.debug("Checking if %s is already in the room %s" % (user['username'], room))
+        if self not in self.rooms[room]:
+            logger.debug("Adding %s to the room %s" % (user['username'], room))
+            client = {
+                'username': user['username'],
+                'window_id': window_id,
+                'room': room,                # TODO: we should get rid of this attribute here
+                'room_objs': []
+            }
+            setattr(self, 'client', client)
+            setattr(self, 'room', room)
+            self.rooms[room].add(self)
+        else:
+            logger.error("%s is trying to subscribe more than once" % user['username'])
+            return
+
+        # let the joining user know about the other users in the room
+        message['data']['users'] = room_users
+        self.send(json.dumps(message))
+
+        # notify the room about the joining user
+        self.broadcast(self.rooms[room], json.dumps({
+            'action': 'message',
+            'data': {
+                'type': 'userjoin',
+                'user': client
+            }
+        }))
         return
 
     def on_message(self, msg):
@@ -67,47 +140,16 @@ class SocketHandler(SockJSConnection):
                     logger.error("Subscription message without username")
                     return
 
-                # create the room
-                if not room in rooms:
-                    rooms[room] = set()
-
-                # find the users who are already in the room
-                room_users = []
-                logger.debug("Checking if there are other users in the room %s" % room)
-                for conn in rooms[room]:
-                    room_client = getattr(conn, 'client')
-                    logger.debug("Found %s in the room %s" % (room_client['username'], room))
-                    room_users.append(room_client)
-
-                # add client to the room
-                logger.debug("Checking if %s is already in the room %s" % (user['username'], room))
-                if self not in rooms[room]:
-                    logger.debug("Adding %s to the room %s" % (user['username'], room))
-                    client = {
-                        'username': user['username'],
-                        'window_id': window_id,
-                        'room': room,                # TODO: we should get rid of this attribute here
-                        'room_objs': []
-                    }
-                    setattr(self, 'client', client)
-                    setattr(self, 'room', room)
-                    rooms[room].add(self)
-                else:
-                    logger.error("%s is trying to subscribe more than once" % user['username'])
-                    return
-
-                # let the joining user know about the other users in the room
-                message['data']['users'] = room_users
-                self.send(json.dumps(message))
-
-                # notify the room about the joining user
-                self.broadcast(rooms[room], json.dumps({
-                    'action': 'message',
-                    'data': {
-                        'type': 'userjoin',
-                        'user': client
-                    }
-                }))
+                # Authenticate the subscription request against the webapp
+                auth_url = settings.WEB_APP_AUTH_URL + auth_token
+                auth_request = HTTPRequest(auth_url)
+                auth_callback = functools.partial(self.validate_auth_token,
+                    room=room,
+                    user=user,
+                    window_id=window_id,
+                    message=message
+                )
+                self.http_client.fetch(auth_request, auth_callback)
                 return
 
             elif message['action'] == 'unsub':
@@ -156,7 +198,7 @@ class SocketHandler(SockJSConnection):
 
                 # broadcast message to the room
                 if room:
-                    self.broadcast(rooms[room], msg)
+                    self.broadcast(self.rooms[room], msg)
                 else:
                     logger.error("Somehow we ended up with a blank room name")
                 
@@ -188,13 +230,13 @@ class SocketHandler(SockJSConnection):
 
         logger.debug("The user %s is leaving the %s room now" % (username, room))
 
-        if room and self in rooms[room]:
-            rooms[room].remove(self)
-            if len(rooms[room]) == 0:
-                del rooms[room]
+        if room and self in self.rooms[room]:
+            self.rooms[room].remove(self)
+            if len(self.rooms[room]) == 0:
+                del self.rooms[room]
 
             # notify the room
-            self.broadcast(rooms[room], json.dumps({
+            self.broadcast(self.rooms[room], json.dumps({
                 'action': 'message',
                 'data': {
                     'type': 'userleave',
@@ -204,6 +246,14 @@ class SocketHandler(SockJSConnection):
         else:
             logger.error("The user already left the room")
 
+    def connectionsCleanup(self):
+        logger.debug("Cleaning up closed connections")
+        for room_name in self.rooms.keys():
+            logger.debug("Found room %s" % room_name)
+            for conn in self.rooms[room_name]:
+                logger.debug("Found connection in room %s" % room_name)
+                if conn.is_closed:
+                    conn.on_close()
 
 if __name__ == '__main__':
     router = SockJSRouter(SocketHandler, '/sockjs')
@@ -214,8 +264,10 @@ if __name__ == '__main__':
 
     app.listen(settings.SOCKET_SERVER_PORT)
 
-    #ioloop.PeriodicCallback(connectionsCleanup, 20000).start()
+    # to be on the safe side
+    grabage_collector = SocketHandler('dummy-session')
+    ioloop.PeriodicCallback(grabage_collector.connectionsCleanup, 120000).start()
 
-    logging.info('Socket server starting on port ' + str(settings.SOCKET_SERVER_PORT))
+    # start main loop
     ioloop.IOLoop.instance().start()
 
