@@ -2,6 +2,7 @@ from tornado import web, ioloop
 from sockjs.tornado import SockJSRouter, SockJSConnection
 from tornado.httpclient import HTTPRequest, AsyncHTTPClient
 
+import os
 import json
 import logging
 import re
@@ -9,7 +10,12 @@ import functools
 import settings
 
 logger = logging.getLogger('socketserver')
-logger.setLevel(logging.ERROR)
+logger_logging_level = logging.ERROR
+if 'LOG_LEVEL' in os.environ:
+    numeric_level = getattr(logging, os.environ['LOG_LEVEL'].upper(), None)
+    if isinstance(numeric_level, int):
+        logger_logging_level = numeric_level
+logger.setLevel(logger_logging_level)
 
 class IndexHandler(web.RequestHandler):
     def get(self):
@@ -32,14 +38,14 @@ class SocketHandler(SockJSConnection):
     def validate_auth_token(self, response, **kwargs):
         if response.error:
             logger.error("A problem with the auth request: %s" % response.error)
-            self.close(4500, "Server error");
+            self.session.close(4500, "Server error");
             return
         else:
             try:
                 res_body = json.loads(response.body)
             except ValueError:
                 logger.error("Received a bad json message")
-                self.close(4500, "Server error");
+                self.session.close(4500, "Server error");
                 return
 
             if res_body and 'validated' in res_body and res_body['validated']:
@@ -52,8 +58,8 @@ class SocketHandler(SockJSConnection):
                 self.register_user(room, user, window_id, message)
             else:
                 # auth rejected
-                logger.debug("Token was accepted")
-                socket.close(4001, "Invalid authentication token");
+                logger.debug("Token was rejected")
+                self.session.close(4001, "Invalid authentication token");
         return
 
     def register_user(self, room, user, window_id, message):
@@ -142,15 +148,18 @@ class SocketHandler(SockJSConnection):
                     return
 
                 # Authenticate the subscription request against the webapp
-                auth_url = settings.WEB_APP_AUTH_URL + auth_token
-                auth_request = HTTPRequest(auth_url)
-                auth_callback = functools.partial(self.validate_auth_token,
-                    room=room,
-                    user=user,
-                    window_id=window_id,
-                    message=message
-                )
-                self.http_client.fetch(auth_request, auth_callback)
+                if settings.USE_AUTHENTICATION:
+                    auth_url = settings.WEB_APP_AUTH_URL + auth_token
+                    auth_request = HTTPRequest(auth_url)
+                    auth_callback = functools.partial(self.validate_auth_token,
+                        room=room,
+                        user=user,
+                        window_id=window_id,
+                        message=message
+                    )
+                    self.http_client.fetch(auth_request, auth_callback)
+                else:
+                    self.register_user(room, user, window_id, message)
                 return
 
             elif message['action'] == 'unsub':
@@ -254,6 +263,7 @@ class SocketHandler(SockJSConnection):
             for conn in self.rooms[room_name]:
                 logger.debug("Found connection in room %s" % room_name)
                 if conn.is_closed:
+                    logger.debug("Connection removed from room %s" % room_name)
                     conn.on_close()
 
 if __name__ == '__main__':
@@ -271,4 +281,3 @@ if __name__ == '__main__':
 
     # start main loop
     ioloop.IOLoop.instance().start()
-

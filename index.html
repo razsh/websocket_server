@@ -44,11 +44,16 @@
 			};
 
 			var _send = function() {
-					console.log("Going to send something ... ");
-					sock.send(JSON.stringify({
-						action: 'message',
-						message: $("#message").val()
-					}));
+				console.log("Going to send something ... ");
+				sock.send(JSON.stringify({
+					action: 'message',
+					data: {
+						data: {
+							type: 'superposter:lock:element',
+							el_key: $("#message").val()
+						}
+					}
+				}));
 			};
 
 			var _close = function() {
@@ -64,14 +69,14 @@
 		</div>
 		<div>
 			<input type="button" id="send" value="send" onclick="_send()"/>
-			<input type="text" = id="message" value="test">
+			<input type="text" = id="message" value="description">
 		</div>
 		<div>
 			<input type="button" id="close" value="close" onclick="_close()"/>
 		</div>
 		<div>
 			<span>room</span>
-			<input type="text" = id="room" value="cms-892840001">
+			<input type="text" = id="room" value="superposter-edit-801">
 		</div>
 
 	</body>
