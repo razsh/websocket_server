@@ -38,7 +38,7 @@ class SocketHandler(SockJSConnection):
             try:
                 res_body = json.loads(response.body)
             except ValueError:
-                logger.error("Received bad json message")
+                logger.error("Received a bad json message")
                 self.close(4500, "Server error");
                 return
 
@@ -104,7 +104,7 @@ class SocketHandler(SockJSConnection):
             try:
                 message = json.loads(msg)
             except ValueError:
-                logger.error("Received bad json message")
+                logger.error("Received a bad json message")
                 return
 
             if not message['action']:
@@ -112,11 +112,11 @@ class SocketHandler(SockJSConnection):
                 return
 
             if not 'data' in message:
-                logger.error("Subscription message with no data")
+                logger.error("Received a message with no data")
                 return
 
             if message['action'] == 'sub':
-                logger.debug("Received a subscribe message")
+                logger.debug("Received a subscription message")
                 #
                 # Subscribe
                 #
@@ -134,6 +134,7 @@ class SocketHandler(SockJSConnection):
 
                 # we serve only cms CE requests
                 if not re.match('^superposter-edit-\d+$', room):
+                    logger.error("Subscription message with an unknown room pattern")
                     return
 
                 if not 'username' in user:
@@ -264,7 +265,7 @@ if __name__ == '__main__':
 
     app.listen(settings.SOCKET_SERVER_PORT)
 
-    # to be on the safe side
+    # data of dead connections is removed by on_close() but to be on the safe side
     grabage_collector = SocketHandler('dummy-session')
     ioloop.PeriodicCallback(grabage_collector.connectionsCleanup, 120000).start()
 
