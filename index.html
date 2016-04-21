@@ -38,8 +38,9 @@
 					console.log('from onmessage', e.data);
 				};
 
-				sock.onclose = function() {
+				sock.onclose = function(e) {
 					console.log('from onclose');
+					console.log(e);
 				};
 			};
 
